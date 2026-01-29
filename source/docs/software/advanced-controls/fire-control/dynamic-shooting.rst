@@ -13,11 +13,15 @@ The Solution
 
 We assume we have a look-up table populated as in described in the previous section, including time-of-flight measurements for each entry.  We:
 
-1. Determine the relative position *and velocity* of the target from the robot.  This tells us where on the look-up table to find the corresponding control variables for the shot, *and* how to adjust the shot to account for the relative motion of the robot and the target.
+1. Determine the relative position *and velocity* of the target from the robot.  The position tells us where to start in the look-up table, and the velocity tells us how to adjust the shot to account for the relative motion of the robot and the target given the time-of-flight of the shot.
 2. Interpolate between the nearest recorded positions in the look-up table to find the corresponding *time-of-flight* for the shot.
 3. Use the time-of-flight to predict the relative position of the target at the moment when the gamepiece will arrive.  This is a simple calculation: we multiply the relative velocity vector to the target by the time of flight, and add it to the relative position of the target at the moment when the shot was taken.  This gives us a *new* value to look up in the look-up table, with its own time-of-flight and control variables.
 4. Return to step 2, checking the table for the time-of-flight of the *adjusted* shot.  If it has changed substantially, we repeat the process; if it is stable, the iteration has converged and we proceed to the next step.  It typically takes no more than 3-5 iterations to converge.
 5. Once the iteration has converged, we use the control variables found in the look-up table to shoot the game piece.
+
+We do not need to involve the control variables for the intermediate steps in the recursion; we iterate *only* on the time-of-flight.  This is a key computational advantage of this approach: it works implicitly on the *geometry* of the look-up table, which *implicitly* encodes the physics of the problem in such a way that the motion-adjustment becomes independent of the specifics of the shooting mechanism physics (except as is latent in the structure of the time-of-flight measurements in the look-up table).
+
+If we did not record the time-of-flight measurements in the look-up table, we would need to calculate the time-of-flight for each shot from the control variables, which would involve a physics model.  Measuring the time-of-flight at the time of table construction gives us enough surplus information to avoid the need for explicit physics modeling at all.
 
 Interactive Visualization
 -------------------------
@@ -38,6 +42,12 @@ Interact with the simulation below to see how the dynamic shooting recursion alg
       </script>
     </div>
 
-Notice that we do not need to involve the control variables for the intermediate steps in the recursion; we iterate *only* on the time-of-flight.  This is a key computational advantage of this approach: it works implicitly on the *geometry* of the look-up table, which *implicitly* encodes the physics of the problem in such a way that the motion-adjustment becomes independent of the specifics of the shooting mechanism physics (except as is latent in the structure of the time-of-flight measurements in the look-up table).
+Note that the convergence behavior depends critically on the projectile velocity; as the projectile velocity increases, the convergence envelope expands, and the algorithm becomes more robust to errors in the robot velocity estimate.  Increasing iteration count also increases the convergence envelope, but this rapidly "saturates" and the difference between 5 and 10 iterations is quite small.
 
-If we did not record the time-of-flight measurements in the look-up table, we would need to calculate the time-of-flight for each shot from the control variables, which would involve a physics model.  Measuring the time-of-flight at the time of table construction gives us enough surplus information to avoid the need for explicit physics modeling at all.
+The "inverted NASA logo" shape of the convergence envelope generally follows the shape of the "maximum recursion stability" geodesic, which *under the assumptions of this simulation* (constant horizontal projectile velocity, no drag) follows the equation :math:`v_r = v_p \cot(\theta)`.  For velocities along this geodesic, the robot is in an instantaneous orbit around the virtual target, meaning the time-of-flight of the shot is not changing as the robot moves.  Perhaps surprisingly, under these assumptions, the curve does not depend on the distance to the target.
+
+Convergence is worst in a direct sprint towards or away from the target - in these cases, shot solution is maximally-sensitive to errors in the robot velocity estimate.  Direct lateral motion is also not great.  Along the "maximum stability" geodesic, there are two "wings" of stable convergence; we can see that it is optimal (in terms of motion-compensation stability) to approach a target diagonally, rather than head-on.
+
+Whether the "constant horizontal shot velocity" assumption is valid depends on the implicit shooting strategy of your look-up table; to achieve a look-up table whose convergence envelope looks *exactly* like the plot above, you would need to choose shots such that the horizontal component of the projectile velocity is constant.  This may not be possible - or optimal - for your particular shooting mechanism; but the general shape of the convergence envelope for a modified shooting strategy will still "rhyme" with the simulation above.
+
+It is fairly easy to generate a convergence plot using your actual look-up table, if you wish to know the exact shape of the convergence envelope for your particular shooting strategy - simply run the recursion along a series of rays in velocity space, and plot the maximum velocity that converges within the given number of iterations for each ray (convergence is typically defined as the time-of-flight changing by less than a certain tolerance, though you can also just check that the final landing position is within a certain tolerance of the target).
