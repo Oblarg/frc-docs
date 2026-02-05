@@ -1,9 +1,7 @@
 Static Shooting via Look-Up Table
 ==================================
 
-.. note:: A look-up table containing firing solutions is generally called a "firing table" in the professional literature; there is a *huge* amount of literature (much of it from the early 20th century) and a fascinating history around the computation of such tables.  As we are not guiding artillery fire, we will use the more general term "look-up table" throughout this documentation.
-
-This section describes how to design, populate, and use a look-up table to aim at a stationary target from a stationary robot.
+This section describes how to use a look-up table to aim at a stationary target from a stationary robot.  This kind of a look-up table is called a `firing table <https://en.wikipedia.org/wiki/Artillery_fire_control#Firing_table>`_, and has been used for hundreds of years because it is simple and effective.
 
 The Problem
 -----------
@@ -24,10 +22,10 @@ To build the look-up table, we need to:
 2. "Dial in" the control variables that successfully score the game piece from each of the starting distances.  Note that if your shooter is not consistent at this stage, then there is nothing the software can do to compensate for it; the mechanical quality of your shooter is always more important than the subtlety of the control software.
 3. (Optional) Measure the time-of-flight of the gamepiece to the goal from each of the starting distances, and record it in the table along with the control variables.  This is needed later, when we discuss shooting at moving targets or from a moving robot; recording this ahead-of-time reduces the amount of computation required at runtime, and improves the accuracy of the shoot-on-the-move algorithm.
 
-Using the Look-Up Table
+Using the Firing Table
 -----------------------
 
-To use the look-up table, we:
+To use the firing table, we:
 
 1. Determine the distance to the target from the robot.  This tells us where on the look-up table to find the corresponding control variables for the shot.  This will likely require some amount of vision processing or other sensor input.
 2. Interpolate between the nearest recorded distances in the look-up table to find the corresponding control variables for the shot.
