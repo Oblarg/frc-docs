@@ -18,9 +18,10 @@ class DynamicShootingWidget {
     this.robotVelocityX = 0.0;
     this.robotVelocityY = 0.0;
     this.numIterations = 10;  // Number of iterations to compute and display
-    this.currentIteration = 1;  // Which iteration to highlight/display (1 to numIterations)
+    this.currentIteration = 1;  // Which iteration to highlight (simulation) / envelope N (fractal)
     this.projectileSpeed = 3.5; // m/s
     this.convergenceTolerance = 0.1; // meters
+    this.mode = "simulation";  // "simulation" | "fractal"
     
     // Set initial values on visualization
     this.visualization.setNumIterations(this.numIterations);
@@ -43,48 +44,59 @@ class DynamicShootingWidget {
   }
   
   buildControlTable(divIdPrefix) {
-    // Clear the old control table and use the control div for our control bar
-    this.controlDrawDiv.innerHTML = ""; // Clear existing content
-    this.controlDrawDiv.style.display = "flex"; // Use flex layout
+    this.controlDrawDiv.innerHTML = "";
+    this.controlDrawDiv.style.display = "flex";
+    this.controlDrawDiv.style.flexDirection = "column";
     this.controlDrawDiv.style.alignItems = "center";
-    this.controlDrawDiv.style.justifyContent = "center";
-    this.controlDrawDiv.style.gap = "10px";
-    this.controlDrawDiv.style.padding = "5px";
+    this.controlDrawDiv.style.gap = "6px";
+    this.controlDrawDiv.style.padding = "6px 5px";
     this.controlDrawDiv.style.backgroundColor = "#f5f5f5";
     this.controlDrawDiv.style.borderTop = "1px solid #ddd";
-    this.controlDrawDiv.style.width = "100%"; // Full width
-    this.controlDrawDiv.style.flexShrink = "0"; // Don't shrink
-    this.controlDrawDiv.style.flexBasis = "auto"; // Natural height
-    this.controlDrawDiv.style.order = "2"; // Ensure it appears after visualization
-    this.controlDrawDiv.style.position = "relative"; // Proper positioning
-    this.controlDrawDiv.style.zIndex = "10"; // Ensure it's above canvas elements
-    this.controlDrawDiv.style.boxSizing = "border-box"; // Include padding in size
-    
-    // Create a tiny control bar - we'll add elements directly to controlDrawDiv
-    const controlBar = this.controlDrawDiv;
-    
-    // Iteration label
+    this.controlDrawDiv.style.width = "100%";
+    this.controlDrawDiv.style.flexShrink = "0";
+    this.controlDrawDiv.style.boxSizing = "border-box";
+    this.controlDrawDiv.style.position = "relative";
+    this.controlDrawDiv.style.zIndex = "10";
+
+    // Row 1: Mode toggle only
+    const row1 = document.createElement("div");
+    row1.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 6px;";
+    const simBtn = document.createElement("button");
+    simBtn.innerHTML = "Simulation";
+    simBtn.setAttribute("id", divIdPrefix + "_mode_sim");
+    simBtn.style.cssText = "padding: 2px 10px; font-size: 12px; cursor: pointer;";
+    simBtn.onclick = function() { this.setMode("simulation"); }.bind(this);
+    row1.appendChild(simBtn);
+    const fractBtn = document.createElement("button");
+    fractBtn.innerHTML = "Fractal";
+    fractBtn.setAttribute("id", divIdPrefix + "_mode_fractal");
+    fractBtn.style.cssText = "padding: 2px 10px; font-size: 12px; cursor: pointer;";
+    fractBtn.onclick = function() { this.setMode("fractal"); }.bind(this);
+    row1.appendChild(fractBtn);
+    this.modeSimBtn = simBtn;
+    this.modeFractalBtn = fractBtn;
+    this.controlDrawDiv.appendChild(row1);
+
+    // Row 2: Iterations, speed, tolerance (same controls in both modes)
+    const row2 = document.createElement("div");
+    row2.style.cssText = "display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; gap: 6px; font-size: 12px;";
+    const controlBar = row2;
+
     const iterationLabel = document.createElement("label");
     iterationLabel.innerHTML = "Iterations:";
     iterationLabel.style.cssText = "font-size: 12px; margin-right: 5px;";
     controlBar.appendChild(iterationLabel);
-    
-    // Previous button
     const prevButton = document.createElement("button");
     prevButton.innerHTML = "◀";
     prevButton.style.cssText = "padding: 2px 8px; font-size: 12px; cursor: pointer;";
     prevButton.onclick = function() {
       if (this.currentIteration > 1) {
         this.currentIteration--;
-        if (this.iterationInput) {
-          this.iterationInput.value = this.currentIteration;
-        }
+        if (this.iterationInput) this.iterationInput.value = this.currentIteration;
         this.update();
       }
     }.bind(this);
     controlBar.appendChild(prevButton);
-    
-    // Iteration number input (for which iteration to display)
     const input = document.createElement("INPUT");
     input.setAttribute("type", "number");
     input.setAttribute("min", "1");
@@ -93,10 +105,7 @@ class DynamicShootingWidget {
     input.setAttribute("value", "1");
     input.setAttribute("id", divIdPrefix + "_iteration");
     input.style.cssText = "width: 50px; padding: 2px; font-size: 12px; text-align: center;";
-    
-    // Store reference to input for syncing
     this.iterationInput = input;
-    
     input.onchange = function (event) {
       let val = parseInt(event.target.value);
       if (isNaN(val) || val < 1) val = 1;
@@ -105,7 +114,6 @@ class DynamicShootingWidget {
       event.target.value = val;
       this.update();
     }.bind(this);
-    
     input.oninput = function (event) {
       let val = parseInt(event.target.value);
       if (!isNaN(val) && val >= 1 && val <= this.numIterations) {
@@ -113,24 +121,27 @@ class DynamicShootingWidget {
         this.update();
       }
     }.bind(this);
-    
     controlBar.appendChild(input);
-    
-    // Next button
     const nextButton = document.createElement("button");
     nextButton.innerHTML = "▶";
     nextButton.style.cssText = "padding: 2px 8px; font-size: 12px; cursor: pointer;";
     nextButton.onclick = function() {
       if (this.currentIteration < this.numIterations) {
         this.currentIteration++;
-        if (this.iterationInput) {
-          this.iterationInput.value = this.currentIteration;
-        }
+        if (this.iterationInput) this.iterationInput.value = this.currentIteration;
         this.update();
       }
     }.bind(this);
     controlBar.appendChild(nextButton);
-    
+
+    this.setMode = function(mode) {
+      this.mode = mode;
+      this.visualization.setMode(mode);
+      this.modeSimBtn.style.fontWeight = mode === "simulation" ? "bold" : "normal";
+      this.modeFractalBtn.style.fontWeight = mode === "fractal" ? "bold" : "normal";
+      this.update();
+    }.bind(this);
+
     // Add separator
     const separator = document.createElement("span");
     separator.innerHTML = "|";
@@ -151,7 +162,7 @@ class DynamicShootingWidget {
     speedSlider.setAttribute("step", "0.1");
     speedSlider.setAttribute("value", this.projectileSpeed.toString());
     speedSlider.setAttribute("id", divIdPrefix + "_projectile_speed");
-    speedSlider.style.cssText = "width: 120px; height: 20px; margin: 0 5px; cursor: pointer;";
+    speedSlider.style.cssText = "width: 100px; height: 20px; margin: 0 3px; cursor: pointer;";
     
     // Value display
     const speedValueDisplay = document.createElement("span");
@@ -203,7 +214,7 @@ class DynamicShootingWidget {
     toleranceSlider.setAttribute("step", "0.01");
     toleranceSlider.setAttribute("value", this.convergenceTolerance.toString());
     toleranceSlider.setAttribute("id", divIdPrefix + "_tolerance");
-    toleranceSlider.style.cssText = "width: 120px; height: 20px; margin: 0 5px; cursor: pointer;";
+    toleranceSlider.style.cssText = "width: 100px; height: 20px; margin: 0 3px; cursor: pointer;";
     
     // Value display
     const toleranceValueDisplay = document.createElement("span");
@@ -234,6 +245,8 @@ class DynamicShootingWidget {
     
     controlBar.appendChild(toleranceSlider);
     controlBar.appendChild(toleranceValueDisplay);
+
+    this.controlDrawDiv.appendChild(row2);
     
     // Control bar is already in the right place (controlDrawDiv is in the flex-grid)
     // Make sure the visualization div doesn't expand into the control area
@@ -298,19 +311,15 @@ class DynamicShootingWidget {
   }
   
   update() {
-    // Update visualization with current values
     this.visualization.setRobotVelocity(this.robotVelocityX, this.robotVelocityY);
     this.visualization.setCurrentIteration(this.currentIteration);
     this.visualization.setNumIterations(this.numIterations);
     this.visualization.setProjectileSpeed(this.projectileSpeed);
     this.visualization.setConvergenceTolerance(this.convergenceTolerance);
     this.visualization.update();
-    
-    // Sync iteration input field
     if (this.iterationInput) {
       this.iterationInput.value = this.currentIteration;
     }
-    
     // Sync speed slider and value display
     if (this.speedSlider) {
       this.speedSlider.value = this.projectileSpeed.toString();

@@ -200,6 +200,17 @@ class DynamicShootingVisualization extends BaseVisualization {
     // Drag state for velocity vector
     this.draggingVelocity = false;
     this.velocityCallback = null; // Callback to update velocity in widget
+
+    // Mode: "simulation" (interactive velocity + shot) or "fractal" (heatmap + geodesic + envelope only)
+    this.mode = "simulation";
+    // Fractal/heatmap state (velocity-space view)
+    this.heatmapData = null;
+    this.heatmapMaxVel = 20.0;
+    this.heatmapGrid = 200;
+    this.iterationCap = 1000;
+    this.heatmapVelocityScale = 1;
+    this.heatmapCenterX = 0;
+    this.heatmapCenterY = 0;
     
     // Add mouse event handlers for dragging velocity vector
     this.animatedCanvas.addEventListener("mousedown", event => this.handleMouseDown(event));
@@ -215,6 +226,72 @@ class DynamicShootingVisualization extends BaseVisualization {
   
   setVelocityCallback(callback) {
     this.velocityCallback = callback;
+  }
+
+  setMode(mode) {
+    if (this.mode === mode) return;
+    this.mode = mode;
+    if (this.mode === "fractal") {
+      this.computeRegionOfConvergence();
+      this.computeHeatmap();
+      this.drawStatic();
+      this.drawDynamic();
+    }
+  }
+
+  // Same scale as simulation: velocity space centered at robot, using reference TOF * field scale
+  velocityToCanvas(vx, vy) {
+    const robotCanvas = this.coords.worldToCanvas(this.robotPos.x, this.robotPos.y);
+    const velScale = this.getReferenceTOF() * this.coords.getScale();
+    return {
+      x: robotCanvas.x + vx * velScale,
+      y: robotCanvas.y - vy * velScale
+    };
+  }
+
+  // Dark green (few iterations) → white (many iterations / cap), logarithmic scaling
+  static iterationToColor(k, cap) {
+    if (cap <= 1) return "rgb(0, 68, 27)";
+    const t = Math.log(k) / Math.log(cap); // 0 = 1 iteration, 1 = cap iterations
+    const r = Math.round(0 + t * 255);
+    const g = Math.round(68 + t * 187);
+    const b = Math.round(27 + t * 228);
+    return "rgb(" + r + "," + g + "," + b + ")";
+  }
+
+  // Compute the visible velocity bounds from the canvas geometry
+  getVisibleVelocityBounds() {
+    const robotCanvas = this.coords.worldToCanvas(this.robotPos.x, this.robotPos.y);
+    const velScale = this.getReferenceTOF() * this.coords.getScale();
+    if (velScale <= 0) return { vxMin: -10, vxMax: 10, vyMin: -10, vyMax: 10 };
+    const vxMin = -(robotCanvas.x) / velScale;
+    const vxMax = (this.width - robotCanvas.x) / velScale;
+    const vyMin = -(this.height - robotCanvas.y) / velScale;
+    const vyMax = (robotCanvas.y) / velScale;
+    return { vxMin, vxMax, vyMin, vyMax };
+  }
+
+  computeHeatmap() {
+    if (!this.robotPos || !this.targetPos) return;
+    const cap = this.iterationCap;
+    const n = this.heatmapGrid;
+    const bounds = this.getVisibleVelocityBounds();
+    this.heatmapBounds = bounds;
+    const stepX = (bounds.vxMax - bounds.vxMin) / n;
+    const stepY = (bounds.vyMax - bounds.vyMin) / n;
+    const data = [];
+    for (let j = 0; j < n; j++) {
+      const row = [];
+      for (let i = 0; i < n; i++) {
+        const vx = bounds.vxMin + (i + 0.5) * stepX;
+        const vy = bounds.vyMax - (j + 0.5) * stepY;
+        const vel = { x: vx, y: vy };
+        const k = this.getIterationsToConvergence(vel, cap);
+        row.push(k);
+      }
+      data.push(row);
+    }
+    this.heatmapData = data;
   }
   
   getCursorPosition(event) {
@@ -464,6 +541,21 @@ class DynamicShootingVisualization extends BaseVisualization {
     return iterations;
   }
   
+  // Returns the 1-based iteration count at which convergence is achieved (final landing within
+  // convergenceTolerance of target), or maxIter if never achieved within maxIter iterations.
+  getIterationsToConvergence(robotVel, maxIter) {
+    const iterations = this.runIterations(robotVel, maxIter);
+    for (let k = 0; k < iterations.length; k++) {
+      const iter = iterations[k];
+      const dx = iter.actualTrajectoryEnd.x - this.targetPos.x;
+      const dy = iter.actualTrajectoryEnd.y - this.targetPos.y;
+      if (Math.sqrt(dx * dx + dy * dy) <= this.convergenceTolerance) {
+        return k + 1;
+      }
+    }
+    return maxIter;
+  }
+
   // Check if a velocity causes convergence failure
   // Returns true if the algorithm fails to converge within tolerance
   checkConvergenceFailure(robotVel, maxIter) {
@@ -493,59 +585,60 @@ class DynamicShootingVisualization extends BaseVisualization {
     return distance > this.convergenceTolerance;
   }
   
-  // Compute region of convergence by casting velocity rays
-  computeRegionOfConvergence() {
+  // Compute region of convergence by casting velocity rays.
+  // If maxIter is provided, use it; otherwise use this.currentIteration. Returns the region array
+  // when maxIter is provided (does not store); otherwise stores in this.regionOfConvergence.
+  computeRegionOfConvergence(maxIter) {
     // Guard against uninitialized positions
     if (!this.robotPos || !this.targetPos) {
-      return;
+      return maxIter !== undefined ? [] : null;
     }
-    
+
     // Ensure target radius is calculated (tolerance is user-configurable, not calculated)
     if (this.targetRadius === null) {
       this.targetRadius = this.coords.pixelsToWorldDistance(this.targetPixelRadius);
     }
-    
-    this.regionOfConvergence = [];
-    
+
+    const limit = maxIter !== undefined ? maxIter : this.currentIteration;
+    const result = [];
+
     // Cast rays at 1 degree intervals (360 rays total)
     const numRays = 360;
     const angleStep = 360 / numRays;
-    
+
     // Linear search parameters
     const velocityStep = 0.05; // Step size in m/s
     const maxVelocity = 20.0; // Maximum velocity to search (m/s)
-    
+
     for (let i = 0; i < numRays; i++) {
       const angleDeg = i * angleStep;
       const angleRad = (angleDeg * Math.PI) / 180;
-      
+
       // Walk outward linearly from zero velocity until convergence fails
-      let minFailureVel = null; // Minimum velocity at which convergence fails
-      
+      let minFailureVel = null;
+
       for (let testVel = 0.0; testVel <= maxVelocity; testVel += velocityStep) {
-        // Calculate velocity vector in this direction
         const testRobotVel = {
           x: testVel * Math.cos(angleRad),
           y: testVel * Math.sin(angleRad)
         };
-        
-        // Check if this velocity causes convergence failure
-        // Use currentIteration as the limit - this shows what converges within that many iterations
-        const fails = this.checkConvergenceFailure(testRobotVel, this.currentIteration);
-        
+        const fails = this.checkConvergenceFailure(testRobotVel, limit);
         if (fails) {
-          // Found the minimum velocity at which convergence fails
           minFailureVel = testVel;
           break;
         }
       }
-      
-      // Store the result (use maxVelocity if no failure found, or the found minimum)
-      this.regionOfConvergence.push({
+
+      result.push({
         angle: angleDeg,
         maxVelocity: minFailureVel !== null ? minFailureVel : maxVelocity
       });
     }
+
+    if (maxIter === undefined) {
+      this.regionOfConvergence = result;
+    }
+    return result;
   }
   
   // Run the dynamic shooting recursion algorithm
@@ -556,38 +649,48 @@ class DynamicShootingVisualization extends BaseVisualization {
   
   drawStaticCustom() {
     const ctx = this.staticCanvasContext;
-    
-    // Draw field background
+    if (this.mode === "fractal") {
+      this.drawStaticFractal(ctx);
+      return;
+    }
+    // Simulation: field background and grid
     ctx.fillStyle = "#E8F5E9";
     ctx.fillRect(0, 0, this.width, this.height);
-    
-    // Draw grid - use full display area, no padding
     ctx.strokeStyle = "#C8E6C9";
     ctx.lineWidth = 1;
-    
     const scale = this.coords.getScale();
     const centerX = this.coords.centerX;
     const centerY = this.coords.centerY;
-    
-    // Draw grid lines - cover full 15m x 15m field
-    // Use 15 grid lines for 15m field (one per meter)
     for (let i = 0; i <= 15; i++) {
       const worldX = i * this.fieldWidth / 15;
       const worldY = i * this.fieldHeight / 15;
       const canvasX = centerX + (worldX - this.coords.fieldCenterX) * scale;
       const canvasY = centerY - (worldY - this.coords.fieldCenterY) * scale;
-      
-      // Vertical line
       ctx.beginPath();
       ctx.moveTo(canvasX, 0);
       ctx.lineTo(canvasX, this.height);
       ctx.stroke();
-      
-      // Horizontal line
       ctx.beginPath();
       ctx.moveTo(0, canvasY);
       ctx.lineTo(this.width, canvasY);
       ctx.stroke();
+    }
+  }
+
+  drawStaticFractal(ctx) {
+    ctx.fillStyle = "#E8F5E9";
+    ctx.fillRect(0, 0, this.width, this.height);
+    if (!this.heatmapData || !this.heatmapBounds) return;
+    const n = this.heatmapData.length;
+    const cellW = this.width / n;
+    const cellH = this.height / n;
+    const cap = this.iterationCap;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const k = this.heatmapData[j][i];
+        ctx.fillStyle = DynamicShootingVisualization.iterationToColor(k, cap);
+        ctx.fillRect(i * cellW, j * cellH, cellW + 1, cellH + 1);
+      }
     }
   }
   
@@ -667,30 +770,133 @@ class DynamicShootingVisualization extends BaseVisualization {
   
   drawDynamicCustom() {
     const ctx = this.animatedCanvasContext;
-    
-    // Always draw robot and target, even if no iterations yet
-    // Guard against uninitialized positions
-    if (!this.robotPos || !this.targetPos) {
+    if (this.mode === "fractal") {
+      if (this.robotPos && this.targetPos) {
+        this.drawRobot(ctx);
+        this.drawTarget(ctx);
+      }
+      this.drawGeodesicVelocitySpace(ctx);
+      this.drawEnvelopeVelocitySpace(ctx);
+      this.drawFractalLegend(ctx);
       return;
     }
-    
-    // Draw robot and get its canvas position
+    if (!this.robotPos || !this.targetPos) return;
     const robotCanvas = this.drawRobot(ctx);
-    
-    // Draw velocity vector
     this.drawVelocityVector(ctx, robotCanvas);
-    
-    // Draw target
     this.drawTarget(ctx);
-    
-    // Draw region of convergence
     this.drawRegionOfConvergence(ctx, robotCanvas);
-    
-    // Draw geodesic of maximum recursion stability
     this.drawGeodesic(ctx, robotCanvas);
-    
-    // Draw iterations up to currentIteration
     this.drawIterations(ctx, robotCanvas);
+  }
+
+  drawGeodesicVelocitySpace(ctx) {
+    if (!this.robotPos || !this.targetPos) return;
+    ctx.save();
+    ctx.strokeStyle = "#9B59B6";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    const dx = this.targetPos.x - this.robotPos.x;
+    const dy = this.targetPos.y - this.robotPos.y;
+    const targetDirection = Math.atan2(dy, dx);
+    const vp = this.projectileSpeed;
+    const maxVelocity = this.heatmapMaxVel;
+    const asymptoteThreshold = 0.05;
+    const numPoints = 180;
+    const thetaRange = Math.PI / 2 - asymptoteThreshold;
+    const thetaStep = thetaRange / numPoints;
+    for (const sign of [-1, 1]) {
+      ctx.beginPath();
+      let first = true;
+      for (let i = 0; i <= numPoints; i++) {
+        const theta = sign * (asymptoteThreshold + i * thetaStep);
+        if (Math.abs(theta) >= Math.PI / 2 - asymptoteThreshold) continue;
+        const cotTheta = Math.cos(theta) / Math.sin(theta);
+        const vel = vp * cotTheta;
+        if (Math.abs(vel) > maxVelocity) {
+          if (!first) ctx.stroke();
+          ctx.beginPath();
+          first = true;
+          continue;
+        }
+        const angleRad = theta + targetDirection;
+        const vx = Math.abs(vel) * Math.cos(angleRad);
+        const vy = Math.abs(vel) * Math.sin(angleRad);
+        const pt = this.velocityToCanvas(vx, vy);
+        if (first) { ctx.moveTo(pt.x, pt.y); first = false; } else { ctx.lineTo(pt.x, pt.y); }
+      }
+      if (!first) ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawEnvelopeVelocitySpace(ctx) {
+    if (!this.regionOfConvergence || this.regionOfConvergence.length === 0) return;
+    ctx.save();
+    ctx.strokeStyle = "#2E86AB";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    let first = true;
+    for (let i = 0; i < this.regionOfConvergence.length; i++) {
+      const p = this.regionOfConvergence[i];
+      const angleRad = (p.angle * Math.PI) / 180;
+      const vx = p.maxVelocity * Math.cos(angleRad);
+      const vy = p.maxVelocity * Math.sin(angleRad);
+      const pt = this.velocityToCanvas(vx, vy);
+      if (first) { ctx.moveTo(pt.x, pt.y); first = false; } else { ctx.lineTo(pt.x, pt.y); }
+    }
+    const p0 = this.regionOfConvergence[0];
+    const a0 = (p0.angle * Math.PI) / 180;
+    const pt0 = this.velocityToCanvas(p0.maxVelocity * Math.cos(a0), p0.maxVelocity * Math.sin(a0));
+    ctx.lineTo(pt0.x, pt0.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawFractalLegend(ctx) {
+    const cap = this.iterationCap;
+    const margin = 12;
+    const barWidth = 18;
+    const barHeight = 180;
+    const x0 = this.width - margin - barWidth - 36;
+    const y0 = margin + 36; // leave room for title above bar
+    ctx.save();
+    // Title above the bar
+    ctx.fillStyle = "#000";
+    ctx.font = "11px Arial";
+    ctx.textAlign = "right";
+    ctx.fillText("Iterations", x0 + barWidth, y0 - 24);
+    ctx.fillText("to converge", x0 + barWidth, y0 - 12);
+    // Draw bar (log-scaled: position t maps to k = cap^t)
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x0, y0, barWidth, barHeight);
+    const nSteps = 96;
+    for (let i = 0; i < nSteps; i++) {
+      const t = i / (nSteps - 1);
+      const k = Math.pow(cap, t); // log scaling: 1 at top, cap at bottom
+      ctx.fillStyle = DynamicShootingVisualization.iterationToColor(Math.round(Math.max(1, k)), cap);
+      const sy = y0 + t * barHeight;
+      const sh = Math.ceil(barHeight / nSteps) + 1;
+      ctx.fillRect(x0, sy, barWidth, sh);
+    }
+    // Tick marks and labels: logarithmically-spaced values
+    const ticks = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].filter(v => v <= cap);
+    ctx.fillStyle = "#000";
+    ctx.font = "10px Arial";
+    ctx.textAlign = "right";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1;
+    for (const tick of ticks) {
+      const t = Math.log(tick) / Math.log(cap);
+      const ty = y0 + t * barHeight;
+      ctx.beginPath();
+      ctx.moveTo(x0, ty);
+      ctx.lineTo(x0 - 4, ty);
+      ctx.stroke();
+      ctx.fillText(String(tick), x0 - 6, ty + 4);
+    }
+    ctx.restore();
   }
   
   drawRegionOfConvergence(ctx, robotCanvas) {
@@ -976,30 +1182,37 @@ class DynamicShootingVisualization extends BaseVisualization {
   setCurrentIteration(iter) {
     if (this.currentIteration !== iter) {
       this.currentIteration = iter;
-      // Recompute region of convergence when current iteration changes
-      // The region shows what converges within this many iterations
-      this.computeRegionOfConvergence();
+      if (this.mode === "fractal") {
+        this.scheduleFractalUpdate();
+      } else {
+        this.computeRegionOfConvergence();
+      }
     }
   }
   
   setNumIterations(numIter) {
     this.numIterations = numIter;
-    // Note: Region uses currentIteration, not numIterations
   }
   
   setProjectileSpeed(speed) {
     if (this.projectileSpeed !== speed) {
       this.projectileSpeed = speed;
-      // Recompute region of convergence when projectile speed changes
-      this.computeRegionOfConvergence();
+      if (this.mode === "fractal") {
+        this.scheduleFractalUpdate();
+      } else {
+        this.computeRegionOfConvergence();
+      }
     }
   }
   
   setConvergenceTolerance(tolerance) {
     if (this.convergenceTolerance !== tolerance) {
       this.convergenceTolerance = tolerance;
-      // Recompute region of convergence when tolerance changes
-      this.computeRegionOfConvergence();
+      if (this.mode === "fractal") {
+        this.scheduleFractalUpdate();
+      } else {
+        this.computeRegionOfConvergence();
+      }
     }
   }
   
@@ -1055,20 +1268,45 @@ class DynamicShootingVisualization extends BaseVisualization {
     
     // Recompute region of convergence since scale changed (affects target radius calculation)
     this.computeRegionOfConvergence();
-    
+    if (this.mode === "fractal") {
+      this.scheduleFractalUpdate();
+    }
     // Always redraw after size update
     this.drawStatic();
     this.drawDynamic();
   }
   
+  // Debounced fractal update: waits for inputs to settle before recomputing the expensive heatmap
+  scheduleFractalUpdate() {
+    if (this._fractalDebounceTimer) {
+      clearTimeout(this._fractalDebounceTimer);
+    }
+    // Immediately redraw overlays (envelope, geodesic, legend, robot, target) with stale heatmap
+    this.computeRegionOfConvergence();
+    this.drawStatic();
+    this.drawDynamic();
+    // Debounce the expensive heatmap recomputation
+    this._fractalDebounceTimer = setTimeout(() => {
+      this._fractalDebounceTimer = null;
+      this.computeHeatmap();
+      this.computeRegionOfConvergence();
+      this.drawStatic();
+      this.drawDynamic();
+    }, 250);
+  }
+
   update() {
-    // Always run recursion to populate iterations array
+    if (this.mode === "fractal") {
+      // In fractal mode, update() only redraws with existing data (cheap).
+      // Heatmap recomputation is triggered only by scheduleFractalUpdate().
+      this.drawStatic();
+      this.drawDynamic();
+      return;
+    }
     this.runRecursion(this.robotVelocity, this.numIterations);
-    // Ensure we have at least one iteration to show
     if (this.currentIteration < 1 && this.iterations.length > 0) {
       this.currentIteration = 1;
     }
-    // Always draw, even if no iterations yet (to show robot, target, and velocity vector)
     this.drawStatic();
     this.drawDynamic();
   }
