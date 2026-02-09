@@ -28,7 +28,7 @@ Interactive Visualization
 
 Interact with the simulation below to see how the dynamic shooting recursion algorithm works.  Use **Simulation** mode to drag the robot velocity and step through iterations; use **Fractal** mode to see a heatmap of iterations-to-convergence over velocity space (with the same geodesic and convergence envelope).
 
-.. note:: The view is a top-down 2D game field: the robot is blue, the target orange.  In **Simulation** mode the (draggable) robot velocity vector shows motion.  For each iteration, the virtual target (green) is offset by time-of-flight times robot velocity; the actual trajectory (red) shows where the shot would land.  The blue envelope is the region of convergence (max velocity that converges within the chosen iteration count and tolerance).  In **Fractal** mode the same envelope and geodesic are overlaid on a heatmap of how many iterations until convergence at each velocity (green = fast, red = slow or no convergence).  The purple geodesic is the "maximum stability" curve, showing velocity vectors that are instantaneously orbiting the virtual target.
+.. note:: The view is a top-down 2D game field: the robot is blue, the target orange.  In **Simulation** mode the (draggable) robot velocity vector shows motion.  For each iteration, the virtual target (green) is offset by time-of-flight times robot velocity; the actual trajectory (red) shows where the shot would land.  In **Fractal** mode the same envelope and geodesic are overlaid on a heatmap of how many iterations until convergence at each velocity (green = fast, red = slow or no convergence).  The purple geodesic is the "maximum stability" curve, showing velocity vectors that are instantaneously orbiting the virtual target.  The dashed blue line shows the "convergence envelope" of velocities that converge within the chosen iteration count and tolerance. The solid blue line shows the "reachability boundary" of velocities for which the shot is geometrically possible - outside of this region, it does not matter *what* fire control solver you use, the shot simply cannot be made.
 
 .. raw:: html
 
@@ -47,6 +47,13 @@ Note that the convergence behavior depends critically on the projectile velocity
 The "inverted NASA logo" shape of the convergence envelope generally follows the shape of the "maximum recursion stability" geodesic, which *under the assumptions of this simulation* (constant horizontal projectile velocity, no drag) follows the equation :math:`v_r = v_p \cot(\theta)`.  For velocities along this geodesic, the robot is in an instantaneous orbit around the virtual target, meaning the time-of-flight of the shot is not changing as the robot moves.  Perhaps surprisingly, under these assumptions, the curve does not depend on the distance to the target.
 
 Convergence is worst in a direct sprint towards or away from the target - in these cases, shot solution is maximally-sensitive to errors in the robot velocity estimate.  Direct lateral motion is also not great.  Along the "maximum stability" geodesic, there are two "wings" of stable convergence; we can see that it is optimal (in terms of motion-compensation stability) to approach a target diagonally, rather than head-on.
+
+In "fractal" mode, we can see the region of poor convergence visually as a "Mach cone" in the direction of the target.  This is much like the sonic boom of a supersonic aircraft, but in this case the "shock" is caused by the robot velocity exceeding the projectile speed (instead of the speed of sound).
+
+Contraction Rate and Preventing Bad Shots
+-----------------------------------------
+
+While *eventual* convergence is theoretically guaranteed for any velocity vector within the reachability boundary - even in these regions of chaotic/poor convergence, the shot will eventually converge to the correct solution if you wait long enough.  But, as we can see from the simulation,this iteration may take a very long time, and truncating it may produce a qualitatively wrong firing solution (the turret points the wrong way entirely).  A good fire control system will check the contraction rate (the rate at which the time-of-flight is changing at the last iteration) and prevent firing if it is too large.
 
 The Effect of Firing Strategy
 -----------------------------

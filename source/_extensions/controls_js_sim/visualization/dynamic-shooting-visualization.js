@@ -637,10 +637,50 @@ class DynamicShootingVisualization extends BaseVisualization {
 
     if (maxIter === undefined) {
       this.regionOfConvergence = result;
+      // Reachability boundary depends only on projectile speed and geometry,
+      // so piggyback on envelope recomputation (cheap, just trig).
+      this.computeReachabilityBoundary();
     }
     return result;
   }
   
+  // Compute the physical reachability boundary in velocity space (the "Mach cone").
+  // For each ray direction, the maximum robot speed that still admits a positive-TOF
+  // solution.  In the forward hemisphere (toward target): v_max = v_p / |sin(phi)|
+  // where phi is the angle off the target line.  In the rear hemisphere: v_max = v_p
+  // (subsonic speeds are always reachable).
+  computeReachabilityBoundary() {
+    if (!this.robotPos || !this.targetPos) return;
+    const dx = this.targetPos.x - this.robotPos.x;
+    const dy = this.targetPos.y - this.robotPos.y;
+    const targetDirection = Math.atan2(dy, dx);
+    const vp = this.projectileSpeed;
+    const maxVelocity = 20.0;
+    const numRays = 360;
+    const angleStep = 360 / numRays;
+    const result = [];
+    for (let i = 0; i < numRays; i++) {
+      const angleDeg = i * angleStep;
+      const angleRad = (angleDeg * Math.PI) / 180;
+      var phi = angleRad - targetDirection;
+      while (phi > Math.PI) phi -= 2 * Math.PI;
+      while (phi < -Math.PI) phi += 2 * Math.PI;
+      var maxVel;
+      if (Math.abs(phi) >= Math.PI / 2) {
+        maxVel = vp;
+      } else {
+        var sinPhi = Math.abs(Math.sin(phi));
+        if (sinPhi < 0.01) {
+          maxVel = maxVelocity;
+        } else {
+          maxVel = Math.min(vp / sinPhi, maxVelocity);
+        }
+      }
+      result.push({ angle: angleDeg, maxVelocity: maxVel });
+    }
+    this.reachabilityBoundary = result;
+  }
+
   // Run the dynamic shooting recursion algorithm
   runRecursion(robotVel, maxIter) {
     this.iterations = this.runIterations(robotVel, maxIter);
@@ -775,6 +815,7 @@ class DynamicShootingVisualization extends BaseVisualization {
         this.drawRobot(ctx);
         this.drawTarget(ctx);
       }
+      this.drawReachabilityBoundaryVelocitySpace(ctx);
       this.drawGeodesicVelocitySpace(ctx);
       this.drawEnvelopeVelocitySpace(ctx);
       this.drawFractalLegend(ctx);
@@ -784,6 +825,7 @@ class DynamicShootingVisualization extends BaseVisualization {
     const robotCanvas = this.drawRobot(ctx);
     this.drawVelocityVector(ctx, robotCanvas);
     this.drawTarget(ctx);
+    this.drawReachabilityBoundary(ctx, robotCanvas);
     this.drawRegionOfConvergence(ctx, robotCanvas);
     this.drawGeodesic(ctx, robotCanvas);
     this.drawIterations(ctx, robotCanvas);
@@ -846,6 +888,59 @@ class DynamicShootingVisualization extends BaseVisualization {
       if (first) { ctx.moveTo(pt.x, pt.y); first = false; } else { ctx.lineTo(pt.x, pt.y); }
     }
     const p0 = this.regionOfConvergence[0];
+    const a0 = (p0.angle * Math.PI) / 180;
+    const pt0 = this.velocityToCanvas(p0.maxVelocity * Math.cos(a0), p0.maxVelocity * Math.sin(a0));
+    ctx.lineTo(pt0.x, pt0.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Draw the physical reachability boundary (Mach cone) in simulation mode
+  drawReachabilityBoundary(ctx, robotCanvas) {
+    if (!this.reachabilityBoundary || this.reachabilityBoundary.length === 0) return;
+    ctx.save();
+    ctx.strokeStyle = "#2E86AB";
+    ctx.lineWidth = 2;
+    // Solid line (no dash) to distinguish from dashed convergence envelope
+    const velScale = this.getReferenceTOF();
+    const scale = this.coords.getScale();
+    ctx.beginPath();
+    let first = true;
+    for (let i = 0; i < this.reachabilityBoundary.length; i++) {
+      const p = this.reachabilityBoundary[i];
+      const angleRad = (p.angle * Math.PI) / 180;
+      const endX = robotCanvas.x + p.maxVelocity * Math.cos(angleRad) * velScale * scale;
+      const endY = robotCanvas.y - p.maxVelocity * Math.sin(angleRad) * velScale * scale;
+      if (first) { ctx.moveTo(endX, endY); first = false; } else { ctx.lineTo(endX, endY); }
+    }
+    const p0 = this.reachabilityBoundary[0];
+    const a0 = (p0.angle * Math.PI) / 180;
+    ctx.lineTo(
+      robotCanvas.x + p0.maxVelocity * Math.cos(a0) * velScale * scale,
+      robotCanvas.y - p0.maxVelocity * Math.sin(a0) * velScale * scale
+    );
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Draw the physical reachability boundary in fractal/velocity-space mode
+  drawReachabilityBoundaryVelocitySpace(ctx) {
+    if (!this.reachabilityBoundary || this.reachabilityBoundary.length === 0) return;
+    ctx.save();
+    ctx.strokeStyle = "#2E86AB";
+    ctx.lineWidth = 2;
+    // Solid line (no dash)
+    ctx.beginPath();
+    let first = true;
+    for (let i = 0; i < this.reachabilityBoundary.length; i++) {
+      const p = this.reachabilityBoundary[i];
+      const angleRad = (p.angle * Math.PI) / 180;
+      const vx = p.maxVelocity * Math.cos(angleRad);
+      const vy = p.maxVelocity * Math.sin(angleRad);
+      const pt = this.velocityToCanvas(vx, vy);
+      if (first) { ctx.moveTo(pt.x, pt.y); first = false; } else { ctx.lineTo(pt.x, pt.y); }
+    }
+    const p0 = this.reachabilityBoundary[0];
     const a0 = (p0.angle * Math.PI) / 180;
     const pt0 = this.velocityToCanvas(p0.maxVelocity * Math.cos(a0), p0.maxVelocity * Math.sin(a0));
     ctx.lineTo(pt0.x, pt0.y);

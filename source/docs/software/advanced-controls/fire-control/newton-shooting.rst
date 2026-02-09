@@ -86,11 +86,11 @@ Toggle between **Fractal (Newton)** and **Fractal (Fixed-Point)** to see the dra
 Convergence Does Not Equal Quality
 -----------------------------------
 
-Newton's method converges to the correct geometric solution in very few iterations.  But the "correct geometric solution" in the ill-conditioned region of velocity space is *the same fragile answer*.  Newton finds it faster; it doesn't make it less fragile.
+Newton's method converges to the correct geometric solution in very few iterations.  But the "correct geometric solution" in the ill-conditioned region of velocity space is still ill-conditioned.  Newton finds it faster; it doesn't make it less fragile.
 
-The fixed-point fractal was warning you about the *physics*, not the *numerics*.  The fine structure of the convergence bands reflects the sensitivity of the time-of-flight to small changes in robot velocity — a property of the problem geometry, not the solver.  A shot that takes 500 fixed-point iterations to converge takes 3 Newton iterations to reach the same answer, but that answer is equally sensitive to velocity error.
+The fixed-point fractal was warning you about the physics, not the numerics.  The fine structure of the convergence bands reflects the sensitivity of the time-of-flight to small changes in robot velocity — a property of the problem geometry, not the solver.  A shot that takes 500 fixed-point iterations to converge takes 3 Newton iterations to reach the same answer, but that answer is equally sensitive to velocity error.
 
-Where Newton does genuinely help is in preventing a bad *failure mode*: in a real-time control loop with a hard iteration budget, the fixed-point iteration in the ill-conditioned region might be cut off mid-oscillation, producing a qualitatively wrong firing solution (the turret points the wrong way entirely).  Newton, by converging quickly, ensures that the solver is not the reason you miss — the miss, if it happens, is the physics' fault, not the numerics'.
+Where Newton does genuinely help is in preventing a *bad failure mode*: in a real-time control loop with a hard iteration budget, the fixed-point iteration in the ill-conditioned region might be cut off mid-oscillation, producing a qualitatively wrong firing solution (the turret points the wrong way entirely).  Newton, by converging quickly, ensures that the solver is not the reason you miss — the miss, if it happens, is the physics' fault, not the numerics'.
 
 Proxy Derivatives for Empirical Tables
 ---------------------------------------
@@ -105,12 +105,14 @@ A practical compromise: use the constant-velocity derivative :math:`1/v_p` as a 
 
 The convergence rate of this proxy-Newton approach sits between linear (fixed-point) and quadratic (exact Newton), with the gap depending on how much drag distorts :math:`\operatorname{tof}'(D)` from :math:`1/v_p`.  For FRC-class projectiles where drag is modest, the distortion is small and you get nearly the full Newton speedup for free.
 
-Shot-Quality Advisory Architecture
------------------------------------
+Contraction Rate and Preventing Bad Shots, Revisited
+----------------------------------------------------
 
-Combining Newton's method with the fixed-point contraction rate creates a powerful architecture for real-time fire control:
+It may seem at this point that we have "solved" the problem of the "mach cone" - by using Newton's method, we can converge to the correct solution in a few iterations, even in the troublesome region of sprinting directly towards the target.  But remember, Newton's method does not change the physics of the problem - it only changes the numerics.  The shot will still likely miss if the robot velocity is not estimated accurately enough.
+
+So, while Newton's method gives us a very powerful tool for quickly finding the correct firing solution, it does so at the cost of erasing the convenient built-in "bad shot" warning system of the fixed-point iteration.  Fortunately, because these computations are exceedingly cheap, we can just do both:
 
 1. **Newton's method** (with proxy derivative) produces the *firing solution*.  It always converges quickly, even in the Mach cone region.
-2. **The fixed-point iteration** produces a *firing solution quality metric* from the same initial guess.  The contraction rate of the fixed-point iteration is a direct, derivative-free measurement of how ill-conditioned the shot is; a threshold on this contraction rate can alert the driver to the inherent risk of missing introduced by the motion, regardless of the solver's convergence behavior.
+2. **The fixed-point iteration**, by means of its contraction rate, produces a *firing solution quality metric* from the same initial guess.
 
 This separates *solver convergence* from *shot quality*, turning convergence-based shot suppression from a hard limitation into an overridable advisory.  The driver retains authority over the risk/reward tradeoff: a marginal-confidence shot with ten seconds left and down by one is a shot you take.  The algorithm provides the information; the human makes the call.
