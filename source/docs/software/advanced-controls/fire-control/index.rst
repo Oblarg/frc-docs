@@ -19,3 +19,4 @@ Recursive approaches have another advantage: they are their own error analysis. 
 
    static-shooting
    dynamic-shooting
+   newton-shooting
